@@ -1,7 +1,19 @@
 using Microsoft.AspNetCore.HttpOverrides;
 using WebApplication1;
 
-var builder = WebApplication.CreateBuilder(args);
+var options = new WebApplicationOptions
+{
+    Args = args
+};
+
+var builder = WebApplication.CreateBuilder(options);
+
+builder.Host.ConfigureAppConfiguration((_, configBuilder) => {
+    foreach (var source in configBuilder.Sources.OfType<Microsoft.Extensions.Configuration.FileConfigurationSource>())
+    {
+        source.ReloadOnChange = false;
+    }
+});
 
 builder.Services.AddSignalR();
 builder.Services.AddCors(o => o.AddDefaultPolicy(p => p
