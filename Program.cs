@@ -1,15 +1,13 @@
+using System.Text.Json;
 using Microsoft.AspNetCore.HttpOverrides;
 using WebApplication1;
 
-var options = new WebApplicationOptions
+var builder = WebApplication.CreateBuilder(new WebApplicationOptions { Args = args });
+
+builder.Host.ConfigureAppConfiguration((_, configBuilder) =>
 {
-    Args = args
-};
-
-var builder = WebApplication.CreateBuilder(options);
-
-builder.Host.ConfigureAppConfiguration((_, configBuilder) => {
-    foreach (var source in configBuilder.Sources.OfType<Microsoft.Extensions.Configuration.FileConfigurationSource>())
+    foreach (var source in configBuilder.Sources
+                 .OfType<Microsoft.Extensions.Configuration.FileConfigurationSource>())
     {
         source.ReloadOnChange = false;
     }
@@ -47,15 +45,35 @@ app.MapGet("/api/room", () => Results.Ok(new
     code = Guid.NewGuid().ToString("N")[..6].ToUpper()
 }));
 
-app.MapPost("/api/quest-answers", (QuestAnswer answer) =>
+app.MapPost("/api/quest-answers", (SubmitAnswerRequest req) =>
 {
-    QuestAnswerStore.Add(answer);
-    return Results.Ok();
+    if (string.IsNullOrWhiteSpace(req.SessionId))
+        return Results.BadRequest(new { error = "sessionId is required" });
+
+    if (string.IsNullOrWhiteSpace(req.QuestId) || !QuestAnswerStore.QuestIds.Contains(req.QuestId))
+        return Results.BadRequest(new { error = $"unknown questId: {req.QuestId}" });
+
+    if (req.Payload.ValueKind == JsonValueKind.Undefined)
+        return Results.BadRequest(new { error = "payload is required" });
+
+    QuestAnswerStore.Add(req.SessionId, req.QuestId, req.Payload);
+    return Results.Ok(QuestAnswerStore.GetProgress(req.SessionId));
+});
+
+app.MapGet("/api/progress/{sessionId}", (string sessionId) =>
+{
+    if (string.IsNullOrWhiteSpace(sessionId))
+        return Results.BadRequest(new { error = "sessionId is required" });
+
+    return Results.Ok(QuestAnswerStore.GetProgress(sessionId));
+});
+
+app.MapDelete("/api/progress/{sessionId}", (string sessionId, string? questId) =>
+{
+    QuestAnswerStore.Reset(sessionId, questId);
+    return Results.Ok(QuestAnswerStore.GetProgress(sessionId));
 });
 
 app.MapGet("/api/quest-answers", () => Results.Ok(QuestAnswerStore.All()));
-
-app.MapGet("/api/quest-answers/{sessionId}", (string sessionId) =>
-    Results.Ok(QuestAnswerStore.BySession(sessionId)));
 
 app.Run();
