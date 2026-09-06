@@ -89,4 +89,22 @@ public static class QuestAnswerStore
 
     public static IEnumerable<QuestAnswer> All() =>
         Sessions.Values.SelectMany(b => b.Values);
+    
+    public static bool IsComplete(string sessionId)
+    {
+        if (!Sessions.TryGetValue(sessionId, out var bucket)) return false;
+        return QuestIds.All(bucket.ContainsKey);
+    }
+
+    public static Dictionary<string, JsonElement> GetAnswers(string sessionId)
+    {
+        var result = new Dictionary<string, JsonElement>();
+        if (Sessions.TryGetValue(sessionId, out var bucket))
+        {
+            foreach (var kv in bucket)
+                result[kv.Key] = kv.Value.Payload;
+        }
+        return result;
+    }
+    
 }

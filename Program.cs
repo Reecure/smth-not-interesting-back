@@ -45,7 +45,7 @@ app.MapGet("/api/room", () => Results.Ok(new
     code = Guid.NewGuid().ToString("N")[..6].ToUpper()
 }));
 
-app.MapPost("/api/quest-answers", (SubmitAnswerRequest req) =>
+app.MapPost("/api/quest-answers", (SubmitAnswerRequest req, ILoggerFactory loggerFactory) =>
 {
     if (string.IsNullOrWhiteSpace(req.SessionId))
         return Results.BadRequest(new { error = "sessionId is required" });
@@ -56,7 +56,14 @@ app.MapPost("/api/quest-answers", (SubmitAnswerRequest req) =>
     if (req.Payload.ValueKind == JsonValueKind.Undefined)
         return Results.BadRequest(new { error = "payload is required" });
 
+    var logger = loggerFactory.CreateLogger("Quest");
+
     QuestAnswerStore.Add(req.SessionId, req.QuestId, req.Payload);
+    logger.LogInformation("сохранён {QuestId} для {SessionId}", req.QuestId, req.SessionId);
+
+    if (req.QuestId == "loading" || QuestAnswerStore.IsComplete(req.SessionId))
+        SessionReport.Print(req.SessionId, logger);
+
     return Results.Ok(QuestAnswerStore.GetProgress(req.SessionId));
 });
 
@@ -75,5 +82,12 @@ app.MapDelete("/api/progress/{sessionId}", (string sessionId, string? questId) =
 });
 
 app.MapGet("/api/quest-answers", () => Results.Ok(QuestAnswerStore.All()));
+
+app.MapGet("/api/report/{sessionId}", (string sessionId, ILoggerFactory loggerFactory) =>
+{
+    var logger = loggerFactory.CreateLogger("Quest");
+    SessionReport.Print(sessionId, logger);
+    return Results.Ok(QuestAnswerStore.GetProgress(sessionId));
+});
 
 app.Run();
