@@ -5,16 +5,20 @@ namespace WebApplication1;
 
 public static class SessionReport
 {
+    private const int Width = 62;
+
     public static void Print(string sessionId, ILogger logger)
     {
         var answers = QuestAnswerStore.GetAnswers(sessionId);
         var sb = new StringBuilder();
 
         sb.AppendLine();
-        sb.AppendLine("╔══════════════════════════════════════════════════════════");
-        sb.AppendLine($"║  СЕССИЯ ЗАВЕРШЕНА  {sessionId}");
-        sb.AppendLine($"║  {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC");
-        sb.AppendLine("╠══════════════════════════════════════════════════════════");
+        sb.AppendLine("+" + new string('=', Width) + "+");
+        Bar(sb, "РЕЗУЛЬТАТЫ СЕССИИ");
+        Bar(sb, sessionId);
+        Bar(sb, $"{DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC");
+        Bar(sb, $"пройдено квестов: {answers.Count} из {QuestAnswerStore.QuestIds.Length}");
+        sb.AppendLine("+" + new string('-', Width) + "+");
 
         AppendPlanes(sb, answers);
         AppendPhrase(sb, answers);
@@ -23,9 +27,9 @@ public static class SessionReport
         AppendChat(sb, answers);
         AppendCats(sb, answers);
 
-        sb.AppendLine("╚══════════════════════════════════════════════════════════");
+        sb.AppendLine("+" + new string('=', Width) + "+");
 
-        logger.LogInformation("{Report}", sb.ToString());
+        logger.LogWarning("{Report}", sb.ToString());
     }
 
     private static JsonElement? Get(Dictionary<string, JsonElement> a, string quest) =>
@@ -34,6 +38,7 @@ public static class SessionReport
     private static string? Str(JsonElement? el, string prop)
     {
         if (el is null) return null;
+        if (el.Value.ValueKind != JsonValueKind.Object) return null;
         if (!el.Value.TryGetProperty(prop, out var v)) return null;
         return v.ValueKind == JsonValueKind.String ? v.GetString() : null;
     }
@@ -41,48 +46,103 @@ public static class SessionReport
     private static int? Num(JsonElement? el, string prop)
     {
         if (el is null) return null;
+        if (el.Value.ValueKind != JsonValueKind.Object) return null;
         if (!el.Value.TryGetProperty(prop, out var v)) return null;
-        return v.ValueKind == JsonValueKind.Number ? v.GetInt32() : null;
+        if (v.ValueKind != JsonValueKind.Number) return null;
+        return v.TryGetInt32(out var n) ? n : (int)v.GetDouble();
+    }
+
+    private static bool? Flag(JsonElement? el, string prop)
+    {
+        if (el is null) return null;
+        if (el.Value.ValueKind != JsonValueKind.Object) return null;
+        if (!el.Value.TryGetProperty(prop, out var v)) return null;
+        return v.ValueKind switch
+        {
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            _ => null
+        };
     }
 
     private static string[] Arr(JsonElement? el, string prop)
     {
         if (el is null) return Array.Empty<string>();
+        if (el.Value.ValueKind != JsonValueKind.Object) return Array.Empty<string>();
         if (!el.Value.TryGetProperty(prop, out var v)) return Array.Empty<string>();
         if (v.ValueKind != JsonValueKind.Array) return Array.Empty<string>();
 
         return v.EnumerateArray()
-            .Select(x => x.ValueKind == JsonValueKind.String ? x.GetString() ?? "" : x.ToString())
+            .Select(x => x.ValueKind switch
+            {
+                JsonValueKind.String => x.GetString() ?? "",
+                JsonValueKind.Object => x.TryGetProperty("label", out var l)
+                    ? l.GetString() ?? x.ToString()
+                    : x.ToString(),
+                _ => x.ToString()
+            })
             .Where(s => !string.IsNullOrWhiteSpace(s))
             .ToArray();
     }
 
+    private static void Bar(StringBuilder sb, string text)
+    {
+        foreach (var chunk in Wrap(text, Width - 4))
+            sb.AppendLine($"|  {chunk.PadRight(Width - 3)}|");
+    }
+
     private static void Section(StringBuilder sb, string title)
     {
-        sb.AppendLine($"║");
-        sb.AppendLine($"║  ── {title} ──");
+        sb.AppendLine("|" + new string(' ', Width) + "|");
+        var line = $"[ {title} ]";
+        sb.AppendLine($"|  {line.PadRight(Width - 3)}|");
     }
 
     private static void Line(StringBuilder sb, string text)
     {
-        foreach (var chunk in Wrap(text, 54))
-            sb.AppendLine($"║     {chunk}");
+        foreach (var chunk in Wrap(text, Width - 7))
+            sb.AppendLine($"|     {chunk.PadRight(Width - 6)}|");
+    }
+
+    private static void Blank(StringBuilder sb)
+    {
+        sb.AppendLine("|" + new string(' ', Width) + "|");
     }
 
     private static IEnumerable<string> Wrap(string text, int width)
     {
-        var words = text.Split(' ');
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            yield return "";
+            yield break;
+        }
+
+        var words = text.Replace("\r", "").Replace("\n", " ").Split(' ');
         var line = new StringBuilder();
 
         foreach (var w in words)
         {
-            if (line.Length + w.Length + 1 > width && line.Length > 0)
+            var word = w;
+
+            while (word.Length > width)
+            {
+                if (line.Length > 0)
+                {
+                    yield return line.ToString();
+                    line.Clear();
+                }
+                yield return word[..width];
+                word = word[width..];
+            }
+
+            if (line.Length + word.Length + 1 > width && line.Length > 0)
             {
                 yield return line.ToString();
                 line.Clear();
             }
+
             if (line.Length > 0) line.Append(' ');
-            line.Append(w);
+            line.Append(word);
         }
 
         if (line.Length > 0) yield return line.ToString();
@@ -93,7 +153,21 @@ public static class SessionReport
         Section(sb, "САМОЛЁТИКИ");
         var tg = Get(a, "telegram");
         var hits = Num(tg, "planesHit");
-        Line(sb, hits is null ? "квест не пройден" : $"сбито: {hits}");
+
+        if (hits is null)
+        {
+            Line(sb, "квест не пройден");
+            return;
+        }
+
+        Line(sb, $"сбито в башню: {hits}");
+        Line(sb, hits switch
+        {
+            0 => "ни одного. дисциплина.",
+            < 5 => "немного, но со вкусом",
+            < 15 => "методично",
+            _ => "это уже вандализм"
+        });
     }
 
     private static void AppendPhrase(StringBuilder sb, Dictionary<string, JsonElement> a)
@@ -103,14 +177,18 @@ public static class SessionReport
         var phrase = Str(tg, "phrase");
         var tail = Str(tg, "tail");
 
-        if (phrase is null)
+        if (string.IsNullOrWhiteSpace(phrase))
         {
             Line(sb, "не собрана");
             return;
         }
 
-        Line(sb, $"целиком: {phrase}");
-        if (!string.IsNullOrWhiteSpace(tail)) Line(sb, $"хвост:   {tail}");
+        Line(sb, phrase);
+        if (!string.IsNullOrWhiteSpace(tail))
+        {
+            Blank(sb);
+            Line(sb, $"дописал от себя: {tail}");
+        }
     }
 
     private static void AppendDucks(StringBuilder sb, Dictionary<string, JsonElement> a)
@@ -143,20 +221,22 @@ public static class SessionReport
 
         var replaced = Num(letter, "replaced");
         var total = Num(letter, "total");
-        Line(sb, $"заменено слов: {replaced}/{total}");
+        Line(sb, $"заменено слов: {replaced} из {total}");
 
         var full = Str(letter, "fullText");
         if (!string.IsNullOrWhiteSpace(full))
         {
-            sb.AppendLine("║");
+            Blank(sb);
             Line(sb, full);
         }
 
-        if (letter.Value.TryGetProperty("segments", out var segs) &&
+        if (letter.Value.ValueKind == JsonValueKind.Object &&
+            letter.Value.TryGetProperty("segments", out var segs) &&
             segs.ValueKind == JsonValueKind.Array)
         {
             var changed = segs.EnumerateArray()
                 .Where(s =>
+                    s.ValueKind == JsonValueKind.Object &&
                     s.TryGetProperty("type", out var t) &&
                     t.GetString() == "slot" &&
                     s.TryGetProperty("replaced", out var r) &&
@@ -165,15 +245,22 @@ public static class SessionReport
 
             if (changed.Count > 0)
             {
-                sb.AppendLine("║");
+                Blank(sb);
                 Line(sb, "подстановки:");
                 foreach (var s in changed)
                 {
                     var orig = s.TryGetProperty("original", out var o) ? o.GetString() : "?";
                     var user = s.TryGetProperty("user", out var u) ? u.GetString() : "?";
-                    Line(sb, $"  «{orig}» → «{user}»");
+                    Line(sb, $"  {orig}  ->  {user}");
                 }
             }
+        }
+
+        var kept = Arr(letter, "kept");
+        if (kept.Length > 0)
+        {
+            Blank(sb);
+            Line(sb, $"оставил как было: {string.Join(", ", kept)}");
         }
     }
 
@@ -195,10 +282,13 @@ public static class SessionReport
         if (reactions.Length > 0) Line(sb, $"реакции: {string.Join(" ", reactions)}");
 
         var troll = Arr(chat, "trollActions");
-        if (troll.Length > 0) Line(sb, $"кнопки: {string.Join(", ", troll)}");
+        if (troll.Length > 0) Line(sb, $"кнопки в ожидании: {string.Join(", ", troll)}");
 
         var dead = Num(chat, "deadClicks");
         if (dead is > 0) Line(sb, $"тыкал в мёртвые кнопки: {dead}");
+
+        var watched = Flag(chat, "watched");
+        if (watched == true) Line(sb, "досмотрел до конца");
     }
 
     private static void AppendCats(StringBuilder sb, Dictionary<string, JsonElement> a)
@@ -215,12 +305,18 @@ public static class SessionReport
         var text = Str(story, "story");
         if (!string.IsNullOrWhiteSpace(text)) Line(sb, text);
 
+        var cats = Arr(story, "cats");
         var score = Num(story, "score");
         var coins = Num(story, "coinsLeft");
         var won = Num(story, "gamesWon");
         var played = Num(story, "gamesPlayed");
+        var spins = Num(story, "spins");
+        var perfect = Flag(story, "perfect");
 
-        sb.AppendLine("║");
-        Line(sb, $"счёт: {score} · монет: {coins} · игр: {won}/{played}");
+        Blank(sb);
+        if (cats.Length > 0) Line(sb, $"коты: {string.Join(", ", cats)}");
+        Line(sb, $"счёт: {score} · монет осталось: {coins}");
+        Line(sb, $"игр: {won} из {played} · спинов: {spins}");
+        if (perfect == true) Line(sb, "идеальный расклад");
     }
 }
